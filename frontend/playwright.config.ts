@@ -18,8 +18,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    // next start is incompatible with output: "standalone". Use Next's dev server for e2e.
-    command: 'npm run dev:fast',
+    // Next 16 defaults to Turbopack; this app has a webpack config, so force webpack.
+    command: 'npx next dev --webpack --port 3000',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,

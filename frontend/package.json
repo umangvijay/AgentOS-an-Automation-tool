@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "npm run build && next start",
-    "dev:fast": "next dev",
+    "dev:fast": "next dev --webpack",
     "build": "npx @tailwindcss/cli -i ./src/app/globals.css -o ./src/app/built.css --minify && next build --webpack && node strip-polyfills.js",
     "postbuild": "node strip-polyfills.js",
     "start": "next start",

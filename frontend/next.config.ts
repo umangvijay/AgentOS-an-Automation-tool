@@ -28,6 +28,8 @@ const nextConfig: NextConfig = {
   output: "standalone",
   compress: true,
   devIndicators: false,
+  // Next 16 errors if webpack is customized and turbopack has no config.
+  turbopack: {},
   experimental: {
     optimizePackageImports: ["lucide-react", "radash", "@xyflow/react"],
     optimizeCss: true,

@@ -18,8 +18,10 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
+    // next start is incompatible with output: "standalone". Use Next's dev server for e2e.
+    command: 'npm run dev:fast',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
+    timeout: 120 * 1000,
   },
 });

@@ -6,26 +6,22 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { safeSnippet } from '../src/lib/safe-snippet';
 
 // ─── A1: Chat crash regression (status_code without data) ──────────────
 
 test.describe('A1 — Chat crash regression', () => {
   test('safeSnippet exists and is importable', async () => {
-    // This is a unit-level check that the shared helper exists.
-    // The real crash test needs a running backend + workspace page.
-    const mod = await import('../src/lib/safe-snippet');
-    expect(mod.safeSnippet).toBeDefined();
-    expect(typeof mod.safeSnippet).toBe('function');
+    expect(safeSnippet).toBeDefined();
+    expect(typeof safeSnippet).toBe('function');
   });
 
   test('safeSnippet handles undefined, null, objects, circular refs', async () => {
-    const { safeSnippet } = await import('../src/lib/safe-snippet');
     expect(safeSnippet(undefined)).toBe('');
     expect(safeSnippet(null)).toBe('');
     expect(safeSnippet({ status_code: 200 })).toContain('200');
     expect(safeSnippet('hello world')).toBe('hello world');
     expect(safeSnippet({ data: null })).toContain('null');
-    // Circular ref
     const obj: Record<string, unknown> = { a: 1 };
     obj.self = obj;
     expect(() => safeSnippet(obj)).not.toThrow();
@@ -37,9 +33,8 @@ test.describe('A1 — Chat crash regression', () => {
 test.describe('A3 — API key validation', () => {
   test('settings page loads without crash', async ({ page }) => {
     await page.goto('/dashboard/settings');
-    // Should see the settings heading (may redirect to login if not authed)
-    const heading = page.locator('h1');
-    await expect(heading.or(page.locator('text=Login'))).toBeVisible({ timeout: 10000 });
+    // Unauthenticated dashboard shows "Sign in to AgentOS"; authed shows Settings.
+    await expect(page.getByRole('heading', { name: /sign in|settings/i })).toBeVisible({ timeout: 15000 });
   });
 });
 

@@ -1,5 +1,6 @@
-# Same image as the API: the workflow engine runs in-process in FastAPI.
-# Cloud Build still tags a worker image for the optional Pub/Sub service.
+# Worker service — runs ONLY the background worker, NOT the API.
+# This is deployed as a separate Cloud Run service from the API.
+# The API sets RUN_WORKER=0 and does NOT start the worker in-process.
 FROM python:3.11-slim as builder
 
 WORKDIR /app
@@ -21,7 +22,10 @@ ENV PYTHONPATH=/app
 ENV PORT=8080
 ENV APP_ENV=production
 ENV STORAGE_BACKEND=sqlite
+# Worker-only mode — the API does NOT start a worker when this is running
+ENV WORKER_ONLY=1
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Start ONLY the worker process, not the API server
+CMD ["python", "-m", "backend.worker"]

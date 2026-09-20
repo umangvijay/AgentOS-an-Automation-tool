@@ -135,3 +135,58 @@ async def start_worker(message_bus: MessageBus, workflow_engine: WorkflowEngine,
         message_bus.consume("agentos-recovery-events", recovery_worker.handle_recovery_event),
         cron_ticker(),
     )
+
+
+# ── Standalone worker entrypoint ──────────────────────────────────────
+# Run with: python -m backend.worker
+# Docker: CMD ["python", "-m", "backend.worker"]
+# Env: WORKER_ONLY=1 (set in Dockerfile.worker / cloudbuild.yaml)
+
+if __name__ == "__main__":
+    import os
+    import sys
+
+    # Confirm this is a standalone worker, not the API
+    worker_only = os.environ.get("WORKER_ONLY", "1")
+    logger.info("Starting standalone worker process (WORKER_ONLY=%s)", worker_only)
+
+    async def _boot_and_run():
+        from backend.config.settings import settings
+        from backend.repositories.factory import RepositoryFactory
+
+        factory = RepositoryFactory(settings)
+        await factory.initialize()
+
+        # Tool router (same as API init)
+        from backend.mcp.tool_router import ToolRouter
+        from backend.mcp.tool_policy import ToolPolicy
+        from backend.services.approvals_engine import ApprovalsEngine
+
+        approvals_engine = ApprovalsEngine()
+        tool_policy = ToolPolicy()
+        tool_router = ToolRouter(
+            factory.mcp_repo, tool_policy, approvals_engine,
+            factory.idempotency_repo, secrets_repo=factory.secrets_repo,
+        )
+
+        # Agent factory
+        from backend.agents.agent_factory import AgentFactory
+        from backend.services.runtime_snapshot import RuntimeSnapshotRegistry
+        snapshot_registry = RuntimeSnapshotRegistry()
+        agent_factory = AgentFactory(snapshot_registry, tool_router)
+
+        # Workflow engine
+        from backend.engine.engine import WorkflowEngine
+        workflow_engine = WorkflowEngine(
+            factory.workflow_repo, factory.message_bus,
+            agent_factory, factory.memory_repo, factory.settings_repo,
+        )
+
+        logger.info("Worker initialized. Listening for events...")
+        await start_worker(factory.message_bus, workflow_engine, factory.schedule_repo)
+
+    try:
+        asyncio.run(_boot_and_run())
+    except KeyboardInterrupt:
+        logger.info("Worker stopped by keyboard interrupt.")
+        sys.exit(0)

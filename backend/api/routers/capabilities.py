@@ -94,10 +94,34 @@ async def debug(body: DebugRequest, request: Request, user: AuthenticatedUser = 
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class PingRequest(BaseModel):
+    candidate_key: Optional[str] = None
+
+
 @router.post("/ping")
-async def ping_gemini(request: Request, user: AuthenticatedUser = Depends(require_not_viewer)):
-    """Cheap check that the shared or vault Gemini key can complete a request."""
+async def ping_gemini(body: PingRequest, request: Request, user: AuthenticatedUser = Depends(require_not_viewer)):
+    """Cheap check that the shared or vault Gemini key can complete a request.
+    If candidate_key is provided, test that key instead of the vault/server key.
+    """
     check_rate_limit(f"user:{user.user_id}", "general")
+
+    if body.candidate_key and body.candidate_key.strip():
+        # Test the candidate key directly — don't touch vault
+        import httpx
+        key = body.candidate_key.strip()
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
+                    json={"contents": [{"parts": [{"text": "Reply with exactly: PONG"}]}]},
+                )
+                if resp.status_code == 200:
+                    return {"ok": True, "reply": "PONG (candidate key works)", "using_user_key": True}
+                return {"ok": False, "reply": f"HTTP {resp.status_code}", "using_user_key": True}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # Default: test the stored vault key or server key
     await _apply_user_key(request, user.user_id)
     try:
         from backend.services import gemini_client

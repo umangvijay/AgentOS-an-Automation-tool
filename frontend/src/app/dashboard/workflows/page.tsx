@@ -60,7 +60,11 @@ export default function WorkflowsPage() {
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                 <div>
-                  <h3 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4 }}>
+                  <h3 style={{
+                    fontSize: 16, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4,
+                    display: "-webkit-box", WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical" as const, overflow: "hidden",
+                  }}>
                     {wf.goal}
                   </h3>
                   <div style={{ fontSize: 13, color: "var(--text-tertiary)", display: "flex", gap: 16 }}>

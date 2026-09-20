@@ -12,8 +12,11 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 5,
   viewportFit: "cover",
-  themeColor: "#f6f5f1",
-  colorScheme: "light",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f6f5f1" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f0f11" },
+  ],
+  colorScheme: "light dark",
 };
 
 export const metadata: Metadata = {
@@ -44,8 +47,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${inter.variable} ${playfair.variable} ${jetbrains.variable}`}>
+    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${playfair.variable} ${jetbrains.variable}`}>
       <body className="font-sans">
+        {/* First-paint theme: apply before React hydrates to prevent flash */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('agentos_theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}})()`,
+          }}
+        />
         <AppProviders>
           {children}
         </AppProviders>

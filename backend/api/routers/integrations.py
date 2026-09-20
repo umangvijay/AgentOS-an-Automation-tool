@@ -68,7 +68,8 @@ async def list_integrations(
 ):
     """List all integrations visible to the user."""
     factory = _get_factory(request)
-    mcps = await factory.mcp_repo.list_mcps(user_id=user.user_id)
+    # Admins administer the whole platform: see every integration.
+    mcps = await factory.mcp_repo.list_mcps(user_id=None if user.is_admin() else user.user_id)
 
     # Enrich with circuit breaker status
     results = []
@@ -332,7 +333,13 @@ async def set_credentials(
     if isinstance(auth, str):
         import json as _json
         auth = _json.loads(auth)
-    auth["type"] = (body.auth_type or "API_KEY").upper()
+    new_type = (body.auth_type or "API_KEY").upper()
+    # Preserve the scheme placement recorded at build time (header/query + header name).
+    placement = {k: auth[k] for k in ("in", "name") if k in auth}
+    auth.clear()
+    auth["type"] = new_type
+    if new_type not in ("BEARER", "BASIC", "OAUTH2", "OAUTH", "NONE"):
+        auth.update(placement)
     auth["credential_ref"] = credential_ref
     await factory.mcp_repo.update_mcp_auth(mcp_id, auth)
 

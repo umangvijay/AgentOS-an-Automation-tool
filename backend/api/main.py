@@ -36,6 +36,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Sentry error tracking — no-op if SENTRY_DSN is not set
+import os as _os
+_sentry_dsn = _os.environ.get("SENTRY_DSN", "")
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            environment=settings.APP_ENV,
+            traces_sample_rate=0.1,
+            integrations=[FastApiIntegration(), StarletteIntegration()],
+        )
+        logger.info("Sentry initialized (DSN set)")
+    except ImportError:
+        logger.warning("SENTRY_DSN set but sentry-sdk not installed — pip install sentry-sdk[fastapi]")
+
 # ══════════════════════════════════════════════════════════════════
 #  APPLICATION
 # ══════════════════════════════════════════════════════════════════
@@ -82,6 +100,7 @@ from backend.api.routers.integrations import router as integrations_router
 from backend.api.routers.notifications import router as notifications_router
 from backend.api.routers.settings_router import router as settings_router
 from backend.api.routers.schedules import router as schedules_router
+from backend.api.routers.admin import router as admin_router
 from backend.api.routers.memory import router as memory_router
 from backend.api.routers.resume import router as resume_router
 from backend.api.routers.webhooks import router as webhooks_router
@@ -98,6 +117,7 @@ app.include_router(integrations_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(schedules_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 app.include_router(memory_router, prefix="/api/v1")
 app.include_router(resume_router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
@@ -174,6 +194,14 @@ async def startup_event():
     logger.info(f"Storage backend: {settings.STORAGE_BACKEND}")
     logger.info(f"Gemini model: {settings.GEMINI_MODEL}")
 
+    # Probe the configured LLM credential so a revoked/expired key is loud and
+    # queryable via /health instead of surfacing as opaque 401s on every run.
+    from backend.services.gemini_client import probe_key_status
+    llm_status = await probe_key_status()
+    app.state.llm_status = llm_status
+    log = logger.info if llm_status["status"] in ("ok", "vertex") else logger.warning
+    log("LLM credential: [%s] %s", llm_status["status"], llm_status["detail"])
+
     if settings.APP_ENV == "production":
         if not (settings.SECRETS_MASTER_KEY or "").strip():
             raise RuntimeError(
@@ -237,9 +265,17 @@ async def startup_event():
     )
     app.state.workflow_engine = workflow_engine
 
-    # 7. Start background worker
-    from backend.worker import start_worker
-    asyncio.create_task(start_worker(factory.message_bus, workflow_engine, factory.schedule_repo))
+    # 7. Start background worker — ONLY if RUN_WORKER env is set.
+    # Production: worker runs as a separate Cloud Run service (Dockerfile.worker).
+    # Local dev: set RUN_WORKER=1 for convenience (single-process mode).
+    import os
+    run_worker_flag = os.environ.get("RUN_WORKER", "1" if settings.APP_ENV == "development" else "0")
+    if run_worker_flag == "1":
+        from backend.worker import start_worker
+        asyncio.create_task(start_worker(factory.message_bus, workflow_engine, factory.schedule_repo))
+        logger.info("Worker started IN-PROCESS (RUN_WORKER=1). For production, deploy a separate worker service.")
+    else:
+        logger.info("Worker NOT started in API process (RUN_WORKER=%s). Expecting separate worker service.", run_worker_flag)
 
     logger.info("All systems initialized. Ready to serve requests.")
 
@@ -271,6 +307,7 @@ async def health_check():
             if settings.GEMINI_API_KEY
             else ("vertex" if settings.GOOGLE_CLOUD_PROJECT else "unset")
         ),
+        "llm_status": getattr(app.state, "llm_status", None),
         "vertex_location": settings.GOOGLE_CLOUD_REGION,
         "factory_initialized": factory is not None and factory._initialized,
     }

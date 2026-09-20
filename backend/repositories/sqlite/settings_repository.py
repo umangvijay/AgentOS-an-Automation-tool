@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Default settings for new users
 DEFAULT_SETTINGS = {
     "autonomy_level": 1,          # L1: ask before writes
-    "theme": "dark",
+    "theme": "light",
     "notifications_email": False,
     "notifications_approval": True,
     "notifications_enabled": True,

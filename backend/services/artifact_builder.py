@@ -249,6 +249,30 @@ def _persist_artifact_remote(metadata: Dict[str, Any], dest: Path) -> None:
         )
 
 
+def save_user_files(user_id: str, name: str, files: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Persist arbitrary agent-produced files as a downloadable artifact.
+    Used by the create_files orchestrator tool (reports, CSVs, code, docs)."""
+    import re as _re
+    import uuid as _uuid
+    safe_name = _re.sub(r"[^a-zA-Z0-9_-]+", "-", (name or "files").strip()).strip("-").lower()[:40] or "files"
+    artifact_id = f"{safe_name}-{_uuid.uuid4().hex[:8]}"
+    dest = artifacts_root() / user_id / artifact_id
+    dest.mkdir(parents=True, exist_ok=True)
+    written = _write_files(dest, files)
+    metadata = {
+        "artifact_id": artifact_id,
+        "name": name or safe_name,
+        "kind": "files",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "file_count": len(written),
+        "files": [{"path": p} for p in written],
+    }
+    meta_path = dest / "artifact.json"
+    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    _persist_artifact_remote(metadata, dest)
+    return metadata
+
+
 def list_artifacts(user_id: str) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     seen = set()

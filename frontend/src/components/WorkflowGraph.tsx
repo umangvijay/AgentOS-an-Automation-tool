@@ -151,7 +151,7 @@ export default function WorkflowGraph({ workflow }: { workflow: WorkflowRun }) {
           onNodeClick={onNodeClick}
           fitView
           attributionPosition="bottom-right"
-          colorMode="light"
+          colorMode={typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"}
         >
           <Background gap={16} />
           <Controls style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', fill: 'var(--text-primary)' }} />

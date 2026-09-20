@@ -1,15 +1,46 @@
-# API image only (root Dockerfile). No worker service.
-# Cloud Run GitHub continuous deployment should use the root Dockerfile
-# and should NOT also attach a trigger to this file — that would double-build.
-# `gcloud run deploy --source` uses this file if present; it must not deploy
-# a second service. Cloud Run itself deploys the image this build produces.
+# AgentOS Cloud Build — builds API and Worker as SEPARATE images.
+# API: runs the FastAPI server with RUN_WORKER=0 (no in-process worker).
+# Worker: runs `python -m backend.worker` as its own Cloud Run service.
 timeout: 1800s
 options:
   logging: CLOUD_LOGGING_ONLY
 steps:
+  # Build API image (root Dockerfile)
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', '${_IMAGE}', '-f', 'Dockerfile', '.']
+    args: ['build', '-t', '${_API_IMAGE}', '-f', 'Dockerfile', '.']
+
+  # Build Worker image (Dockerfile.worker)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_WORKER_IMAGE}', '-f', 'Dockerfile.worker', '.']
+
+  # Deploy API service (RUN_WORKER=0 so it does NOT start the worker)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'agentos-api'
+      - '--image=${_API_IMAGE}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--set-env-vars=RUN_WORKER=0'
+      - '--allow-unauthenticated'
+
+  # Deploy Worker service (separate container, WORKER_ONLY=1)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'agentos-worker'
+      - '--image=${_WORKER_IMAGE}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--no-allow-unauthenticated'
+      - '--set-env-vars=WORKER_ONLY=1'
+
 images:
-  - '${_IMAGE}'
+  - '${_API_IMAGE}'
+  - '${_WORKER_IMAGE}'
 substitutions:
-  _IMAGE: 'gcr.io/${PROJECT_ID}/agentos-api'
+  _API_IMAGE: 'gcr.io/${PROJECT_ID}/agentos-api'
+  _WORKER_IMAGE: 'gcr.io/${PROJECT_ID}/agentos-worker'
+  _REGION: 'us-central1'

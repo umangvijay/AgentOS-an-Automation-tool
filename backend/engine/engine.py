@@ -491,6 +491,23 @@ class WorkflowEngine:
         if approved_req_id:
             context["approved_request"] = await maybe_await(self.repo.get_approval(approved_req_id))
 
+        # Live tool-call progress: tools can emit timeline events the user watches in chat.
+        async def _emit_progress(summary: str) -> None:
+            try:
+                from backend.models.schemas import WorkflowEvent, WorkflowEventType
+                evt = WorkflowEvent(
+                    type=WorkflowEventType.TOOL_INVOKED,
+                    workflow_id=run.workflow_id,
+                    run_id=run.run_id,
+                    task_id=task.task_id,
+                    summary=str(summary)[:300],
+                )
+                await self.repo.save_event(evt.model_dump(mode="json"))
+            except Exception:
+                logger.debug("Progress emit failed", exc_info=True)
+
+        context["emit_progress"] = _emit_progress
+
         catalog = []
         catalog_json = "[]"
         workflow_context_str = ""
@@ -627,6 +644,13 @@ class WorkflowEngine:
                     text = json.dumps(browse_out, default=str)[:8000]
                 elif tool_result is not None:
                     text = json.dumps(tool_result, default=str)[:8000]
+                elif last_err is not None and gemini_client.is_auth_error(last_err):
+                    text = (
+                        "Your Gemini API key is invalid, expired, or revoked, so I couldn't think this step through. "
+                        "Add a fresh key in Settings → Your Gemini API key (it is validated live before saving), "
+                        "then send this again. Tip: MCP builds from an OpenAPI URL on the Integrations page work "
+                        "even without a model key."
+                    )
                 else:
                     text = (
                         "Gemini quota is exhausted for this step. Add your own Gemini key or an xAI Grok key "
@@ -727,16 +751,15 @@ class WorkflowEngine:
 
     @staticmethod
     def _classify_error(exc: Exception) -> str:
-        msg = str(exc).lower()
-        if any(x in msg for x in ("timeout", "timed out", "deadline")):
-            return ErrorType.TIMEOUT_ERROR
-        if any(x in msg for x in (
-            "429", "quota", "resource_exhausted", "network", "temporarily",
-            "connection", "503", "502", "econnreset", "unavailable", "overloaded",
-        )):
-            return ErrorType.TRANSIENT_ERROR
-        if any(x in msg for x in ("ssrf", "unauthorized", "401", "403", "captcha", "mfa", "otp")):
-            return ErrorType.AUTHORIZATION_ERROR
-        if any(x in msg for x in ("unknown tool", "missing tool", "no integration")):
-            return ErrorType.SEMANTIC_ERROR
-        return ErrorType.INTERNAL_ERROR
+        from backend.engine.failure_classifier import classify_failure
+        category = classify_failure(message=str(exc)).category
+        return {
+            "timeout": ErrorType.TIMEOUT_ERROR,
+            "transient_network": ErrorType.TRANSIENT_ERROR,
+            "rate_limited": ErrorType.TRANSIENT_ERROR,
+            "auth_expired": ErrorType.AUTHORIZATION_ERROR,
+            "auth_invalid": ErrorType.AUTHORIZATION_ERROR,
+            "schema_mismatch": ErrorType.SEMANTIC_ERROR,
+            "not_found": ErrorType.SEMANTIC_ERROR,
+            "server_error": ErrorType.TRANSIENT_ERROR,
+        }.get(category, ErrorType.INTERNAL_ERROR)

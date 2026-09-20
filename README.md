@@ -20,7 +20,7 @@ The same codebase runs in both places. One setting switches storage; Gemini foll
 | Secrets | `.env` (gitignored) | Secret Manager |
 | Data | `data/agentos.db` | Firestore (survives scale-to-zero) |
 
-Repository: [umangvijay/AgenticOS-Google-DEVPOST-](https://github.com/umangvijay/AgenticOS-Google-DEVPOST-)
+Repository: [umangvijay/AgentOS-an-Automation-tool](https://github.com/umangvijay/AgentOS-an-Automation-tool)
 
 ## Features
 

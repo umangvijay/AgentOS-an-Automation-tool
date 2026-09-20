@@ -42,7 +42,7 @@ class AuthenticatedUser:
     auth_provider: str
 
     def is_admin(self) -> bool:
-        return self.role == Role.ADMIN
+        return self.role in (Role.ADMIN, Role.SUPER_ADMIN)
 
     def is_viewer(self) -> bool:
         return self.role == Role.VIEWER

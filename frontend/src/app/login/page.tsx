@@ -106,6 +106,12 @@ function LoginContent() {
           {GOOGLE_ENABLED && <GoogleLoginButton disabled={loading} />}
           <Link href="/signup" style={{ textDecoration: "none" }}><button className="btn btn-ghost btn-lg" style={{ width: "100%", marginTop: 12, border: "1px solid var(--border-primary)" }}>Create an account</button></Link>
         </div>
+                <div style={{ display: "flex", justifyContent: "center", marginTop: 20 }}>
+          <span className="trust-badge">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z" /></svg>
+            Protected by industry-standard AES-256 and end-to-end client-side encryption
+          </span>
+        </div>
         <p style={{ textAlign: "center", marginTop: 24, fontSize: 14, color: "var(--text-secondary)" }}>Need help? <Link href="/contact" style={{ color: "var(--accent)" }}>Contact Support</Link></p>
       </div>
     </div>

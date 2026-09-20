@@ -47,6 +47,44 @@ def is_retryable_model_error(exc: BaseException) -> bool:
     )
 
 
+
+def is_auth_error(exc: BaseException) -> bool:
+    """True when the credential itself is rejected (revoked/expired key)."""
+    msg = str(exc)
+    return (
+        "UNAUTHENTICATED" in msg
+        or "API_KEY_INVALID" in msg
+        or "API key not valid" in msg
+        or "ACCESS_TOKEN_TYPE_UNSUPPORTED" in msg
+        or "401" in msg
+    )
+
+
+async def probe_key_status() -> dict:
+    """Classify the configured LLM credential at startup.
+    Returns {"status": "ok"|"invalid"|"missing"|"vertex", "detail": str}."""
+    import os
+    key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
+    if key:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+                )
+            if resp.status_code == 200:
+                return {"status": "ok", "detail": "Gemini API key accepted"}
+            if resp.status_code in (400, 401, 403):
+                return {"status": "invalid", "detail": f"Gemini rejected the configured key (HTTP {resp.status_code}). Add a fresh key from aistudio.google.com/apikey in Settings."}
+            return {"status": "invalid", "detail": f"Gemini key check failed (HTTP {resp.status_code})."}
+        except Exception as e:
+            return {"status": "unknown", "detail": f"Could not reach Gemini: {str(e)[:150]}"}
+    if project:
+        return {"status": "vertex", "detail": f"Using Vertex AI (project {project})"}
+    return {"status": "missing", "detail": "No GEMINI_API_KEY and no GOOGLE_CLOUD_PROJECT configured. Add a key in Settings."}
+
+
 FLASH_MODELS = (
     "gemini-3.7-flash",
     "gemini-3.6-flash",

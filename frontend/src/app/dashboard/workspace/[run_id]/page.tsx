@@ -3,13 +3,18 @@
 import { useEffect, useRef, useState, CSSProperties } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 import {
   getWorkflow, getWorkflowThread, subscribeWorkflowEvents, cancelWorkflow, retryWorkflow,
   resumeWorkflow, WorkflowRun, WorkflowEvent, Task,
 } from "@/lib/api";
+import { safeSnippet } from "@/lib/safe-snippet";
 import ChatComposer from "@/components/ChatComposer";
 import WorkflowGraph from "@/components/WorkflowGraph";
 import ExecutionTimeline from "@/components/ExecutionTimeline";
+import ThreadRail from "@/components/ThreadRail";
 
 function bubbleStyle(role: "user" | "agent"): CSSProperties {
   if (role === "user") {
@@ -40,17 +45,14 @@ function assistantText(task: Task): string | null {
     return `Integration generated${names ? ` with ${names}` : ""}.${mcp ? `\nmcp_id: ${mcp}` : ""}`;
   }
   if (typeof out.status_code === "number") {
-    const data = out.data;
-    const snippet = typeof data === "string" ? data.slice(0, 800) : JSON.stringify(data, null, 2).slice(0, 800);
+    const snippet = safeSnippet(out.data);
     return `Live response · HTTP ${out.status_code}${snippet ? `\n\n${snippet}` : ""}`;
   }
   if (out.ok === true || out.reachable === true || out.sent === true) {
-    return JSON.stringify(out, null, 2);
+    return safeSnippet(out);
   }
-  try {
-    const pretty = JSON.stringify(out, null, 2);
-    if (pretty && pretty !== "{}" && pretty.length < 1200) return pretty;
-  } catch { /* ignore */ }
+  const pretty = safeSnippet(out, 1200);
+  if (pretty && pretty !== "{}" && pretty.length > 0) return pretty;
   return null;
 }
 
@@ -60,6 +62,49 @@ function isTerminal(status?: string) {
 
 function isWaitingHuman(workflow: WorkflowRun) {
   return (workflow.tasks || []).some((t) => t.status === "WAITING_APPROVAL");
+}
+
+function UserBubble({ goal }: { goal: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const needsClamp = goal.length > 600;
+  return (
+    <div style={bubbleStyle("user")}>
+      <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 4 }}>You</div>
+      <div
+        style={{
+          whiteSpace: "pre-wrap",
+          lineHeight: 1.5,
+          ...(!expanded && needsClamp
+            ? {
+                display: "-webkit-box",
+                WebkitLineClamp: 6,
+                WebkitBoxOrient: "vertical" as const,
+                overflow: "hidden",
+              }
+            : {}),
+        }}
+      >
+        {goal}
+      </div>
+      {needsClamp && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            background: "none",
+            border: "none",
+            color: "rgba(255,255,255,0.75)",
+            cursor: "pointer",
+            fontSize: 12,
+            padding: "4px 0 0",
+            textDecoration: "underline",
+          }}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function TurnView({ workflow }: { workflow: WorkflowRun }) {
@@ -74,14 +119,13 @@ function TurnView({ workflow }: { workflow: WorkflowRun }) {
 
   return (
     <>
-      <div style={bubbleStyle("user")}>
-        <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 4 }}>You</div>
-        <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{workflow.goal}</div>
-      </div>
+      <UserBubble goal={workflow.goal} />
       {replies.map(({ task, text }) => (
         <div key={`${workflow.run_id}-out-${task.task_id}`} style={bubbleStyle("agent")}>
           <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>AgentOS</div>
-          <div style={{ fontSize: 15, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{text}</div>
+          <div className="agent-markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{text!}</ReactMarkdown>
+          </div>
         </div>
       ))}
       {failed.map((t) => (
@@ -102,7 +146,9 @@ function TurnView({ workflow }: { workflow: WorkflowRun }) {
       ))}
       {busy && (
         <div style={bubbleStyle("agent")}>
-          <span className="spinner" style={{ width: 16, height: 16, display: "inline-block", verticalAlign: "middle", marginRight: 8 }} />
+          <span className="typing-dots" style={{ marginRight: 10 }} aria-hidden>
+            <span /><span /><span />
+          </span>
           Thinking…
         </div>
       )}
@@ -127,6 +173,7 @@ export default function WorkspaceChatPage() {
   const [stopping, setStopping] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
+  const [timelineOpen, setTimelineOpen] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
 
   async function loadThread(anchorId: string) {
@@ -242,6 +289,17 @@ export default function WorkspaceChatPage() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns]);
 
+  const railTurns = turns.map((wf) => ({
+    run_id: wf.run_id,
+    goal: wf.goal || "",
+    reply: ((wf.tasks || []).find((t) => t.status === "COMPLETED" && assistantText(t)) ?? null)
+      ? (assistantText((wf.tasks || []).find((t) => t.status === "COMPLETED")!) || "")
+      : "",
+  }));
+  const jumpTo = (runId: string) => {
+    document.getElementById(`turn-${runId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const latest = turns[turns.length - 1];
   const waitingHuman = turns.some(isWaitingHuman);
   const busy = turns.some((t) => !isTerminal(t.status) && !isWaitingHuman(t));
@@ -312,16 +370,40 @@ export default function WorkspaceChatPage() {
         </div>
       )}
 
-      <div className="chat-thread hide-scrollbar">
+      <div
+        className="chat-thread hide-scrollbar"
+        onScroll={(e) => {
+          // Auto-collapse the timeline so messages get full width while reading.
+          if (e.currentTarget.scrollTop > 60 && timelineOpen) setTimelineOpen(false);
+        }}
+      >
         {turns.map((wf) => (
-          <TurnView key={wf.run_id} workflow={wf} />
+          <div key={wf.run_id} id={`turn-${wf.run_id}`} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <TurnView workflow={wf} />
+          </div>
         ))}
         <div ref={endRef} />
       </div>
 
       {showTimeline && events.length > 0 && (
-        <div className="glass-card" style={{ padding: 12, maxHeight: 280, overflow: "auto" }}>
-          <ExecutionTimeline events={events} />
+        <div className="glass-card" style={{ padding: 0, marginBottom: 8, overflow: "hidden" }}>
+          <button
+            type="button"
+            onClick={() => setTimelineOpen((v) => !v)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              width: "100%", padding: "10px 14px", background: "none", border: "none",
+              cursor: "pointer", color: "var(--text-secondary)", fontSize: 13, fontWeight: 600,
+            }}
+          >
+            <span>Execution Timeline · {events.length} events</span>
+            <span aria-hidden>{timelineOpen ? "▾" : "▸"}</span>
+          </button>
+          {timelineOpen && (
+            <div style={{ padding: 12, maxHeight: 280, overflow: "auto", borderTop: "1px solid var(--border-primary)" }}>
+              <ExecutionTimeline events={events} />
+            </div>
+          )}
         </div>
       )}
 
@@ -345,10 +427,19 @@ export default function WorkspaceChatPage() {
           disabled={busy}
           threadId={threadId}
           parentRunId={latest?.run_id || runId}
-          onRunCreated={() => {
+          onRunCreated={(res) => {
             void (async () => {
-              await new Promise((r) => setTimeout(r, 280));
-              await loadThread(runId);
+              // Immediately fetch the new follow-up run and append it
+              try {
+                const newRun = await getWorkflow(res.run_id);
+                setTurns((prev) => {
+                  if (prev.some((t) => t.run_id === res.run_id)) return prev;
+                  return [...prev, newRun];
+                });
+              } catch { /* will appear on next poll */ }
+              // Reload the full thread using threadId (not URL runId)
+              await new Promise((r) => setTimeout(r, 350));
+              await loadThread(threadId);
             })();
           }}
         />

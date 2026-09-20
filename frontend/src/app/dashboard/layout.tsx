@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useState, useEffect, ReactNode, useRef } from "react";
 import { getUnreadCount, listNotifications, markNotificationRead, markAllNotificationsRead, listWorkflows, Notification, WorkflowRun } from "@/lib/api";
 import ContextUsageButton from "@/components/ContextUsage";
+import { AmbientOrbs } from "@/components/GlassPanel";
 
 // ── Navigation Items ─────────────────────────────────────────────
 const NEW_CHAT = {
@@ -101,6 +102,8 @@ function DashboardInner({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [llmStatus, setLlmStatus] = useState<{ status: string; detail: string } | null>(null);
+  const [llmBannerDismissed, setLlmBannerDismissed] = useState(false);
   const [recents, setRecents] = useState<WorkflowRun[]>([]);
   const [recentsError, setRecentsError] = useState("");
   
@@ -115,6 +118,21 @@ function DashboardInner({ children }: { children: ReactNode }) {
       router.push("/login");
     }
   }, [isLoading, isAuthenticated, router]);
+
+  // Apply saved theme on page load and persist for first-paint script
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    (async () => {
+      try {
+        const { settings } = await import("@/lib/api").then((m) => m.getSettings());
+        const theme = settings?.theme || "light";
+        document.documentElement.setAttribute("data-theme", theme);
+        try { localStorage.setItem("agentos_theme", theme); } catch { /* ignore */ }
+      } catch {
+        // Default to light if settings fail to load
+      }
+    })();
+  }, [isAuthenticated]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -178,15 +196,31 @@ function DashboardInner({ children }: { children: ReactNode }) {
       try {
         const data = await listWorkflows(50);
         const workflows = data.workflows || [];
-        const byThread = new Map<string, WorkflowRun>();
+        // Group by thread. Keep the OLDEST run for title/href (thread root),
+        // but track the newest created_at for sort order.
+        const byThread = new Map<string, { root: WorkflowRun; latestAt: string }>();
         for (const wf of workflows) {
           const tid = wf.thread_id || wf.parent_run_id || wf.run_id;
           const prev = byThread.get(tid);
-          if (!prev || String(wf.created_at || "") >= String(prev.created_at || "")) {
-            byThread.set(tid, wf);
+          if (!prev) {
+            byThread.set(tid, { root: wf, latestAt: String(wf.created_at || "") });
+          } else {
+            const wfAt = String(wf.created_at || "");
+            // Keep whichever is OLDER as the root (first goal = title)
+            if (wfAt < String(prev.root.created_at || "")) {
+              prev.root = wf;
+            }
+            // Track newest timestamp for sort
+            if (wfAt > prev.latestAt) {
+              prev.latestAt = wfAt;
+            }
           }
         }
-        setRecents([...byThread.values()]);
+        // Sort by most recent activity descending
+        const sorted = [...byThread.values()]
+          .sort((a, b) => b.latestAt.localeCompare(a.latestAt))
+          .map((entry) => entry.root);
+        setRecents(sorted);
         setRecentsError("");
       } catch (err: unknown) {
         setRecentsError(err instanceof Error ? err.message : "Could not load chats");
@@ -208,6 +242,24 @@ function DashboardInner({ children }: { children: ReactNode }) {
     poll();
     const interval = setInterval(poll, 15000);
     return () => clearInterval(interval);
+  }, [isAuthenticated]);
+
+  // LLM credential status (public /health) — warn when the key is dead so
+  // users understand why chat/MCP-from-description fails.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const apiBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1");
+        const healthUrl = apiBase.replace(/\/api\/v1\/?$/, "") || apiBase;
+        const res = await fetch(`${healthUrl}/health`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setLlmStatus(data.llm_status || null);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
   }, [isAuthenticated]);
 
   // Load notifications when panel opens
@@ -323,19 +375,27 @@ function DashboardInner({ children }: { children: ReactNode }) {
           {showLabels && (
             <div className="sidebar-section-label">Recents</div>
           )}
-          {showLabels && recents.slice(0, 14).map((wf) => (
+          {showLabels && recents.slice(0, 14).map((wf) => {
+            const threadHref = `/dashboard/workspace/${wf.thread_id || wf.run_id}`;
+            return (
             <Link
-              key={wf.run_id}
-              href={`/dashboard/workspace/${wf.run_id}`}
-              className={`sidebar-recent ${pathname === `/dashboard/workspace/${wf.run_id}` || pathname === `/dashboard/workspace/${wf.thread_id || ""}` ? "active" : ""}`}
+              key={wf.thread_id || wf.run_id}
+              href={threadHref}
+              className={`sidebar-recent ${pathname === threadHref || pathname === `/dashboard/workspace/${wf.run_id}` ? "active" : ""}`}
               onClick={() => setMobileOpen(false)}
               title={wf.goal}
             >
               <span className="truncate">{wf.goal}</span>
             </Link>
-          ))}
+            );
+          })}
           {showLabels && recentsError && recents.length === 0 && (
             <div className="sidebar-empty" style={{ color: "var(--error)" }}>{recentsError}</div>
+          )}
+          {showLabels && (user?.role === "admin" || user?.role === "super_admin") && (
+            <Link href="/admin" className={`sidebar-recent ${pathname === "/admin" ? "active" : ""}`}>
+              <span className="truncate">🛡 Control Center</span>
+            </Link>
           )}
           {showLabels && !recentsError && recents.length === 0 && (
             <div className="sidebar-empty">No chats yet</div>
@@ -387,7 +447,32 @@ function DashboardInner({ children }: { children: ReactNode }) {
       </aside>
 
       {/* ── Main content ───────────────────────────────────────── */}
+      <AmbientOrbs />
       <div className={`main-content ${!isMobile && collapsed ? "sidebar-collapsed" : ""}`} style={{ flex: 1 }}>
+        {/* LLM credential warning */}
+        {llmStatus && ["invalid", "missing", "unknown"].includes(llmStatus.status) && !llmBannerDismissed && (
+          <div className="llm-status-banner" role="status">
+            <span style={{ flexShrink: 0 }}>⚠️</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              {llmStatus.status === "invalid"
+                ? "Your Gemini API key is invalid or expired — chat planning and MCP builds from descriptions need it."
+                : "No working Gemini key is configured — chat planning and MCP builds from descriptions need it."}{" "}
+              MCP Forge from OpenAPI URLs and pasted specs still works without a key.
+            </span>
+            <Link href="/dashboard/settings" className="btn btn-secondary btn-sm" style={{ flexShrink: 0 }}>
+              Fix in Settings
+            </Link>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ flexShrink: 0, padding: 4 }}
+              aria-label="Dismiss"
+              onClick={() => setLlmBannerDismissed(true)}
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {/* Topbar */}
         <header className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>

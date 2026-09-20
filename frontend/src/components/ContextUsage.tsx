@@ -162,11 +162,11 @@ export default function ContextUsageButton() {
               </ul>
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border-primary)", fontSize: 12, color: "var(--text-secondary)", display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span>Daily budget</span>
+                  <span>5h window (auto-reset)</span>
                   <span style={{ fontFamily: "var(--font-mono)" }}>{dailyUsed.toLocaleString()} / {dailyLimit.toLocaleString()}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span>Daily remaining</span>
+                  <span>Window remaining</span>
                   <span style={{ fontFamily: "var(--font-mono)" }}>{dailyRemaining.toLocaleString()}</span>
                 </div>
                 <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--text-tertiary)" }}>

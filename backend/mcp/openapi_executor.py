@@ -1,9 +1,9 @@
 """Execute registered OpenAPI tools as real HTTP calls. No synthetic responses."""
 
+import base64
 import json
 import logging
 from typing import Any, Dict, Optional
-from urllib.parse import urljoin
 
 import httpx
 
@@ -11,6 +11,37 @@ from backend.mcp.builder.openapi_parser import OpenAPIParser, SSRFViolationError
 from backend.security.secrets_vault import secrets_vault
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_auth(headers: Dict[str, str], query_params: Dict[str, Any], auth: Dict[str, Any], secret: str) -> None:
+    """Attach the stored secret using the auth scheme the API actually expects.
+
+    The MCP factory records where the spec says the credential goes
+    ({"in": "header"|"query", "name": "X-API-Key"} / Bearer / Basic).
+    Legacy manifests without placement default to Bearer, matching prior behavior.
+    """
+    auth_type = str(auth.get("type") or "API_KEY").upper()
+    location = str(auth.get("in") or "header").lower()
+    name = str(auth.get("name") or "").strip()
+
+    if auth_type == "BASIC":
+        token = base64.b64encode(secret.encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {token}"
+        return
+    if auth_type in ("BEARER", "OAUTH2", "OAUTH"):
+        headers["Authorization"] = f"Bearer {secret}"
+        return
+    if auth_type == "NONE":
+        return
+    # API_KEY (default): respect the spec's declared placement.
+    if location == "query":
+        query_params[name or "api_key"] = secret
+        return
+    header_name = name or "Authorization"
+    if header_name.lower() == "authorization":
+        headers["Authorization"] = f"Bearer {secret}"
+    else:
+        headers[header_name] = secret
 
 
 async def resolve_secret(user_id: str, credential_ref: Optional[str], secrets_repo=None) -> Optional[str]:
@@ -94,53 +125,76 @@ async def execute_openapi_tool(
     credential_ref = auth.get("credential_ref")
     secret = await resolve_secret(user_id, credential_ref, secrets_repo)
     if secret:
-        auth_type = str(auth.get("type") or "API_KEY").upper()
-        if auth_type in ("OAUTH2", "OAUTH", "API_KEY", "NONE"):
-            headers.setdefault("Authorization", f"Bearer {secret}")
+        _apply_auth(headers, query_params, auth, secret)
 
-    url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/")) if not path.startswith("http") else path
-    if not path.startswith("http"):
-        url = base_url.rstrip("/") + (path if path.startswith("/") else "/" + path)
+    url = base_url.rstrip("/") + (path if path.startswith("/") else "/" + path)
     parser._validate_ssrf(url)
 
     method = (operation.get("http_method") or "GET").upper()
-    async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
-        try:
-            response = await client.request(
-                method=method,
-                url=url,
-                params=query_params,
-                headers=headers,
-                json=json_body,
-            )
-        except SSRFViolationError:
-            raise
-        except httpx.HTTPError as e:
-            return {"ok": False, "error": str(e), "url": url, "method": method}
+    redirect_hops = 0
+    while True:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
+            try:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    params=query_params,
+                    headers=headers,
+                    json=json_body,
+                )
+            except SSRFViolationError:
+                raise
+            except httpx.HTTPError as e:
+                from backend.engine.failure_classifier import classify_failure
+                failure = classify_failure(message=str(e))
+                return {"ok": False, "error": str(e), "url": url, "method": method,
+                        "failure": {"category": failure.category, "retryable": failure.retryable,
+                                    "recovery_hint": failure.recovery_hint}}
 
-        if response.status_code in (301, 302, 307, 308):
+        if response.status_code in (301, 302, 303, 307, 308) and redirect_hops < 3:
             loc = response.headers.get("Location", "")
-            parser._validate_ssrf(loc)
-            raise RuntimeError(f"Redirect blocked for security: {loc}")
+            if not loc:
+                break
+            next_url = httpx.URL(url).join(loc)
+            parser._validate_ssrf(str(next_url))
+            url = str(next_url)
+            if next_url.params:
+                query_params = {}
+            redirect_hops += 1
+            # 303 (and de-facto 301/302 on non-GET) convert the body to a GET
+            if response.status_code == 303 or (
+                response.status_code in (301, 302) and method != "GET"
+            ):
+                method = "GET"
+                json_body = None
+            continue
+        break
 
-        body: Any
-        try:
-            body = response.json()
-        except Exception:
-            body = response.text
+    body: Any
+    try:
+        body = response.json()
+    except Exception:
+        body = response.text
 
-        if response.is_error:
-            return {
-                "ok": False,
-                "status": response.status_code,
-                "url": url,
-                "method": method,
-                "body": body,
-            }
+    if response.is_error:
+        from backend.engine.failure_classifier import classify_failure
+        failure = classify_failure(status=response.status_code, message=str(body)[:300])
         return {
-            "ok": True,
+            "ok": False,
             "status": response.status_code,
             "url": url,
             "method": method,
             "body": body,
+            "failure": {
+                "category": failure.category,
+                "retryable": failure.retryable,
+                "recovery_hint": failure.recovery_hint,
+            },
         }
+    return {
+        "ok": True,
+        "status": response.status_code,
+        "url": url,
+        "method": method,
+        "body": body,
+    }

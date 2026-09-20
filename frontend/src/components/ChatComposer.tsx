@@ -231,6 +231,7 @@ export default function ChatComposer({
             }}
             disabled={loading || disabled}
             rows={compact ? 1 : 2}
+            maxLength={50000}
           />
           <button type="submit" className="send-orb" disabled={disabled || loading} aria-label="Send">
             {loading ? <span className="spinner" style={{ width: 16, height: 16 }} /> : (
@@ -240,6 +241,18 @@ export default function ChatComposer({
             )}
           </button>
         </div>
+        {goal.length > 0 && (
+          <div style={{
+            fontSize: 11,
+            color: goal.length >= 49000 ? "var(--error)" : goal.length >= 40000 ? "var(--warning)" : "var(--text-tertiary)",
+            textAlign: "right",
+            padding: "4px 12px 0",
+            fontVariantNumeric: "tabular-nums",
+            opacity: goal.length < 100 ? 0.5 : 1,
+          }}>
+            {goal.length.toLocaleString()} / 50,000
+          </div>
+        )}
       </div>
       {!compact && (
         <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>

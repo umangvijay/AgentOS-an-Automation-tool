@@ -27,6 +27,30 @@ from backend.services.gemini_client import GeminiQuotaExceeded, is_quota_error
 logger = logging.getLogger(__name__)
 
 
+def auth_metadata_from_spec(model, fallback_type: str = "API_KEY") -> Dict[str, str]:
+    """Derive credential placement from the spec's securitySchemes so the
+    executor sends the secret where the API actually reads it
+    (e.g. X-API-Key header vs Authorization: Bearer vs ?api_key=)."""
+    schemes = getattr(model, "security_schemes", None) or {}
+    for scheme in (schemes or {}).values():
+        if not isinstance(scheme, dict):
+            continue
+        stype = str(scheme.get("type") or "").lower()
+        if stype == "http" and str(scheme.get("scheme") or "").lower() == "bearer":
+            return {"type": "BEARER"}
+        if stype == "http" and str(scheme.get("scheme") or "").lower() == "basic":
+            return {"type": "BASIC"}
+        if stype == "apikey" or stype == "apiKey":
+            location = str(scheme.get("in") or "header").lower()
+            name = str(scheme.get("name") or "").strip()
+            if location == "query" and name:
+                return {"type": "API_KEY", "in": "query", "name": name}
+            if name:
+                return {"type": "API_KEY", "in": "header", "name": name}
+            return {"type": "API_KEY", "in": "header"}
+    return {"type": str(fallback_type or "API_KEY").upper()}
+
+
 class MCPFactoryAgent:
     def __init__(self, mcp_repo, secrets_repo=None):
         self.mcp_repo = mcp_repo
@@ -98,6 +122,8 @@ class MCPFactoryAgent:
 
             trust_tier = "verified" if method in ("url", "spec", "openapi") else "pending_review"
             auto_enable = True
+            # Prefer the spec's own security scheme placement; fall back to the requested auth_type.
+            auth_meta = auth_metadata_from_spec(model, fallback_type=auth_type)
 
             await self._log(build_id, "Registering MCP in the catalog", logs)
             mcp_id = await self.registry.register_mcp(
@@ -111,17 +137,31 @@ class MCPFactoryAgent:
                 spec_json=spec_text,
                 spec_hash=spec_hash,
                 spec_version=spec_version,
-                auth={"type": auth_type},
+                auth=auth_meta,
                 is_enabled=auto_enable,
                 mcp_id=mcp_id,
             )
 
             tool_summaries = [{"name": t.tool_name, "description": t.description} for t in tools]
             names = ", ".join(t["name"] for t in tool_summaries[:16] if t.get("name"))
+            needs_auth = str(auth_meta.get("type") or "").upper() not in ("", "NONE")
+            auth_hint = (
+                "\nThis API authenticates"
+                + (f" via {auth_meta.get('name') or 'Authorization'}"
+                   + (" query parameter" if auth_meta.get("in") == "query" else " header")
+                   if auth_meta.get("name") else " with a Bearer token")
+                + ". Attach its API key on the integration page (or Vault) before calling tools."
+                if needs_auth else ""
+            )
+            probe_warning = ""
+            if probe.get("status") in ("probe_error",) or probe.get("ok") is False:
+                probe_warning = f"\nLive probe did not succeed ({probe.get('http_status') or probe.get('error') or 'error'}) — verify the API is reachable and the spec's server URL is correct."
             msg = (
                 f"Built {display_name} with {len(tools)} tool{'s' if len(tools) != 1 else ''}"
                 + (f": {names}." if names else ".")
-                + f"\nmcp_id: {mcp_id}. Store the API key in Vault to call these tools live."
+                + f"\nmcp_id: {mcp_id}."
+                + auth_hint
+                + probe_warning
             )
             result = {
                 "status": "success",

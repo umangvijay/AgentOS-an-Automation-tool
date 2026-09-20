@@ -148,6 +148,7 @@ async def check_website(url: str, timeout: float = 15.0) -> Dict[str, Any]:
 
     report = {
         "url": url,
+        "data": None,
         "final_url": final_url,
         "host": host,
         "status_code": status_code,

@@ -12,7 +12,7 @@ bytes (~4 characters per token).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, Request
@@ -74,17 +74,20 @@ async def get_context_usage(
 
     conversation = ""
     daily_used = 0
-    today = datetime.now(timezone.utc).date().isoformat()
+    # Claude-style rolling window: usage auto-resets every 5 hours.
+    WINDOW_HOURS = 5
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=WINDOW_HOURS)).isoformat()
     if factory:
         try:
-            runs = await factory.workflow_repo.list_runs(user.user_id, limit=12, offset=0)
+            runs = await factory.workflow_repo.list_runs(user.user_id, limit=40, offset=0)
             blobs = []
-            for run in runs[:8]:
-                blob = _run_blob(run)
-                blobs.append(blob)
+            for run in runs:
                 created = str(run.get("created_at") or "")
-                if created.startswith(today):
+                if created >= cutoff:
+                    blob = _run_blob(run)
                     daily_used += _tokens(blob)
+                    if len(blobs) < 8:
+                        blobs.append(blob)
             conversation = "\n\n".join(blobs)
         except Exception:
             conversation = ""
@@ -92,6 +95,12 @@ async def get_context_usage(
     memory_blob = ""
     daily_limit = settings.DEFAULT_DAILY_TOKEN_LIMIT
     model = settings.GEMINI_MODEL
+    try:
+        user_settings = await factory.settings_repo.get_settings(user.user_id) if factory else None
+        if user_settings and user_settings.get("daily_token_limit"):
+            daily_limit = int(user_settings["daily_token_limit"])
+    except Exception:
+        pass
     if factory:
         try:
             memories = await factory.memory_repo.list_memories(user.user_id, limit=8)
@@ -124,12 +133,15 @@ async def get_context_usage(
 
     return {
         "window_tokens": CONTEXT_WINDOW,
-        "used_tokens": used,
+        "used_tokens": daily_used,
+        "context_estimate": used,
         "remaining_tokens": remaining,
         "percent": pct,
         "daily_limit": daily_limit,
         "daily_used": daily_used,
         "daily_remaining": daily_remaining,
+        "window_hours": 5,
+        "window_resets_at": (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat(),
         "model": model,
         "tool_count": len(catalog),
         "categories": categories,

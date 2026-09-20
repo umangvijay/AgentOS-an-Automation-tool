@@ -612,10 +612,17 @@ export async function debugSource(source: string, language = "python", error_mes
   });
 }
 
-export async function pingGemini() {
+export async function pingGemini(candidateKey?: string) {
   return apiFetch<{ ok: boolean; reply: string; using_user_key: boolean }>("/capabilities/ping", {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify(candidateKey ? { candidate_key: candidateKey } : {}),
+  });
+}
+
+export async function validateCredential(name: string, values: Record<string, string>) {
+  return apiFetch<{ valid: boolean; error?: string }>("/credentials/validate", {
+    method: "POST",
+    body: JSON.stringify({ name, values }),
   });
 }
 
@@ -737,4 +744,35 @@ export interface ContextUsage {
 
 export async function getContextUsage() {
   return apiFetch<ContextUsage>("/usage/context");
+}
+
+
+export async function listAdminUsers() {
+  return apiFetch<{ users: Array<{ user_id: string; email?: string; name?: string; role: string; is_active: boolean; runs_total?: number; runs_5h?: number; last_run_at?: string }>; count: number; window_hours: number }>(
+    "/admin/users"
+  );
+}
+
+export async function setUserActive(userId: string, active: boolean) {
+  return apiFetch<{ user_id: string; is_active: boolean }>(`/admin/users/${userId}/${active ? "enable" : "disable"}`, { method: "POST" });
+}
+
+export async function adminStats() {
+  return apiFetch<{ users_total: number; users_active_5h: number; runs_total: number; integrations: number; window_hours: number }>("/admin/stats");
+}
+
+export async function setUserRole(userId: string, role: string) {
+  return apiFetch<{ user_id: string; role: string }>(`/admin/users/${userId}/role`, { method: "POST", body: JSON.stringify({ role }) });
+}
+
+
+export async function deleteAnyUser(userId: string) {
+  return apiFetch<{ deleted: boolean }>(`/admin/users/${userId}`, { method: "DELETE" });
+}
+
+export async function setUserLimits(userId: string, dailyTokenLimit?: number, windowHours?: number) {
+  return apiFetch<{ user_id: string }>(`/admin/users/${userId}/limits`, {
+    method: "PUT",
+    body: JSON.stringify({ daily_token_limit: dailyTokenLimit ?? null, window_hours: windowHours ?? null }),
+  });
 }

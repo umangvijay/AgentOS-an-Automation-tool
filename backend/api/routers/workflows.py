@@ -237,6 +237,13 @@ async def create_workflow(
                         **(t_def.input_data or {}),
                         "prompt": f"Earlier in this conversation:\n{ctx}\n\nNew message:\n{prompt}",
                     }
+                elif (t_def.agent or "").lower().startswith("orchestrator"):
+                    t_goal = str((t_def.input_data or {}).get("goal") or goal)
+                    t_def.input_data = {
+                        **(t_def.input_data or {}),
+                        "goal": t_goal,
+                        "conversation_context": f"Earlier in this conversation:\n{ctx}",
+                    }
 
         prepare_dag(workflow_def)
 
